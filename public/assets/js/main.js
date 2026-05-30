@@ -41,6 +41,9 @@ const state = {
     text: 'Watermark',
     position: 'br',
     fontSize: 24
+  },
+  compression: {
+    quality: 80
   }
 };
 
@@ -131,6 +134,9 @@ const els = {
   watermarkPosition: document.getElementById('watermarkPosition'),
   watermarkText: document.getElementById('watermarkText'),
   watermarkFontSize: document.getElementById('watermarkFontSize'),
+  // 压缩设置
+  compressQuality: document.getElementById('compressQuality'),
+  compressQualityValue: document.getElementById('compressQualityValue'),
 };
 
 const allowedTypes = [
@@ -364,9 +370,10 @@ function switchView(view) {
   if (view === 'settings') {
     loadBackupSettings();
     loadWatermarkSettings();
+    loadCompressionSettings();
     // 管理 section 仅管理员可见
     const isAdmin = isAdminUser();
-    ['adminSection', 'registerSection', 'userManagementSection', 'backupSection', 'autoBackupSection', 'watermarkSection'].forEach((id) => {
+    ['adminSection', 'registerSection', 'userManagementSection', 'backupSection', 'autoBackupSection', 'watermarkSection', 'compressionSection'].forEach((id) => {
       const el = document.getElementById(id);
       if (el) el.style.display = isAdmin ? '' : 'none';
     });
@@ -429,7 +436,7 @@ function renderResults() {
     const thumbWrap = document.createElement('div');
     thumbWrap.className = 'thumb-wrap';
     const imageEl = document.createElement('img');
-    imageEl.src = res.thumbUrl || (res.url + '?w=400');
+    imageEl.src = res.thumbUrl || (res.url + '?w=400&f=webp&q=' + state.compression.quality);
     imageEl.alt = '图片';
     imageEl.loading = 'lazy';
     thumbWrap.appendChild(imageEl);
@@ -810,7 +817,7 @@ async function deleteImages(ids) {
 }
 
 function openImageModal(url) {
-  els.modalImage.src = url + '?w=1200';
+  els.modalImage.src = url + '?w=1200&f=webp&q=' + state.compression.quality;
   els.modalImage.style.transform = 'translate(-50%, -50%) scale(1)';
   els.zoomSlider.value = 1;
   els.modal.style.display = 'flex';
@@ -1050,7 +1057,7 @@ function setupEventListeners() {
       if (!dirty.length) { showNotification('没有需要保存的更改', 'info'); return; }
 
       const saved = [];
-      let hasBranding = false, hasBackup = false, hasWatermark = false;
+      let hasBranding = false, hasBackup = false, hasWatermark = false, hasCompression = false;
 
       for (const section of dirty) {
         const type = section.dataset.save;
@@ -1064,6 +1071,8 @@ function setupEventListeners() {
           hasBackup = true;
         } else if (type === 'watermark') {
           hasWatermark = true;
+        } else if (type === 'compression') {
+          hasCompression = true;
         }
       }
 
@@ -1102,6 +1111,18 @@ function setupEventListeners() {
           secs.forEach((s) => { s.classList.remove('dirty'); saved.push(s.querySelector('h3')?.textContent || ''); });
         } catch (err) {
           showNotification('水印设置保存失败: ' + err.message, 'error');
+          return;
+        }
+      }
+
+      // 压缩设置通过 API 保存
+      if (hasCompression) {
+        try {
+          await saveCompressionSettings();
+          const secs = document.querySelectorAll('.settings-section.dirty[data-save="compression"]');
+          secs.forEach((s) => { s.classList.remove('dirty'); saved.push(s.querySelector('h3')?.textContent || ''); });
+        } catch (err) {
+          showNotification('压缩设置保存失败: ' + err.message, 'error');
           return;
         }
       }
@@ -1169,6 +1190,17 @@ function setupEventListeners() {
     els.watermarkFontSize.addEventListener('input', () => {
       state.watermark.fontSize = Math.min(200, Math.max(8, parseInt(els.watermarkFontSize.value) || 24));
       markSectionDirty(els.watermarkFontSize);
+    });
+  }
+
+  // 压缩设置事件监听
+  if (els.compressQuality) {
+    els.compressQuality.addEventListener('input', () => {
+      state.compression.quality = parseInt(els.compressQuality.value) || 80;
+      if (els.compressQualityValue) {
+        els.compressQualityValue.textContent = els.compressQuality.value + '%';
+      }
+      markSectionDirty(els.compressQuality);
     });
   }
 
@@ -1736,6 +1768,40 @@ async function saveWatermarkSettings() {
       position: state.watermark.position,
       fontSize: state.watermark.fontSize,
     }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data?.message || '保存失败');
+  }
+  return res.json();
+}
+
+async function loadCompressionSettings() {
+  try {
+    const res = await fetch('/api/settings/compression');
+    if (!res.ok) return;
+    const data = await res.json();
+    state.compression.quality = Number(data.quality) || 80;
+    applyCompressionSettings();
+  } catch {
+    // ignore
+  }
+}
+
+function applyCompressionSettings() {
+  if (els.compressQuality) {
+    els.compressQuality.value = state.compression.quality;
+    if (els.compressQualityValue) {
+      els.compressQualityValue.textContent = state.compression.quality + '%';
+    }
+  }
+}
+
+async function saveCompressionSettings() {
+  const res = await fetch('/api/settings/compression', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + getToken() },
+    body: JSON.stringify({ quality: state.compression.quality }),
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));

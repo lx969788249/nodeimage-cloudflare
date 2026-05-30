@@ -273,6 +273,18 @@
               </div>
             </section>
 
+            <!-- 压缩设置 -->
+            <section class="settings-section" id="compressionSection" data-save="compression">
+              <span class="dirty-badge">未保存</span>
+              <h3>压缩设置</h3>
+              <div class="setting-row">
+                <label class="setting-title">默认压缩质量</label>
+                <input type="range" id="compressQuality" min="10" max="100" value="80" style="flex:1;">
+                <span id="compressQualityValue" style="min-width:40px;text-align:right;">80%</span>
+              </div>
+              <div class="setting-desc" style="font-size:12px;color:var(--text-muted,#888);margin-top:4px;">影响缩略图 (?w=400) 和大图预览 (?w=1200) 的 WebP 压缩率，数值越高画质越好但文件越大</div>
+            </section>
+
             <!-- 图床自定义 -->
             <section class="settings-section" id="adminSection" data-save="branding">
               <span class="dirty-badge">未保存</span>

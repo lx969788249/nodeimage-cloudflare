@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { hashPassword } from '../crypto';
 import type { R2Bucket } from '@cloudflare/workers-types';
 import { authMiddleware, requireAdmin } from '../auth';
-import { listUsers, getUser, getUserByUsername, updateUser, deleteUser, deleteImagesByIds, getBranding, getBackupConfig, getWatermarkConfig, setSetting, listImagesByUser, createUser, getStats } from '../db';
+import { listUsers, getUser, getUserByUsername, updateUser, deleteUser, deleteImagesByIds, getBranding, getBackupConfig, getWatermarkConfig, getCompressionConfig, setSetting, listImagesByUser, createUser, getStats } from '../db';
 import { json, errorJson, generateApiKey, nanoid } from '../utils';
 import type { AuthUser, Env } from '../types';
 
@@ -138,6 +138,20 @@ adminRoutes.post('/settings/watermark', authMiddleware, requireAdmin, async (c) 
   };
   await setSetting(c.env.DB, 'watermark', JSON.stringify(config));
   return json({ message: '水印设置已更新', watermark: config });
+});
+
+// GET /api/settings/compression
+adminRoutes.get('/settings/compression', async (c) => {
+  const config = await getCompressionConfig(c.env.DB);
+  return json({ quality: config.quality });
+});
+
+// POST /api/settings/compression
+adminRoutes.post('/settings/compression', authMiddleware, requireAdmin, async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const quality = Math.min(100, Math.max(10, Number(body.quality) || 80));
+  await setSetting(c.env.DB, 'compression', JSON.stringify({ quality }));
+  return json({ message: '压缩设置已更新', quality });
 });
 
 // GET /api/stats

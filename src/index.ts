@@ -7,7 +7,7 @@ import imageRoutes from './routes/images';
 import adminRoutes from './routes/admin';
 import backupRoutes from './routes/backup';
 import { json, getTodayRange } from './utils';
-import { getWatermarkConfig } from './db';
+import { getWatermarkConfig, getCompressionConfig } from './db';
 import { processImage } from './image-processor';
 import type { Env, AuthUser } from './types';
 
@@ -85,15 +85,16 @@ app.get('/uploads/*', async (c) => {
   const rawW = toInt(q.w);
   const rawH = toInt(q.h);
   const rawQ = toInt(q.q);
+  const wmConfig = await getWatermarkConfig(c.env.DB);
+  const compConfig = await getCompressionConfig(c.env.DB);
   const opts = {
     width: rawW ? Math.min(4000, Math.max(1, rawW)) : undefined,
     height: rawH ? Math.min(4000, Math.max(1, rawH)) : undefined,
     format: (['webp', 'jpeg', 'png'].includes(q.f) ? q.f : undefined) as 'webp' | 'jpeg' | 'png' | undefined,
-    quality: rawQ ? Math.min(100, Math.max(1, rawQ)) : undefined,
+    quality: rawQ ? Math.min(100, Math.max(1, rawQ)) : compConfig.quality,
     watermark: q.wm === '1',
   };
 
-  const wmConfig = await getWatermarkConfig(c.env.DB);
   const result = await processImage(bucket, key, opts, wmConfig);
   if (!result) return c.notFound();
 

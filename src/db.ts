@@ -318,6 +318,18 @@ export async function getWatermarkConfig(db: D1Database): Promise<WatermarkConfi
   return { enabled: false, text: 'Watermark', position: 'br', fontSize: 24 };
 }
 
+export async function getCompressionConfig(db: D1Database): Promise<{ quality: number }> {
+  const raw = await getSetting(db, 'compression');
+  if (raw) {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      // fall through
+    }
+  }
+  return { quality: 80 };
+}
+
 export async function getBranding(db: D1Database): Promise<Branding> {
   const raw = await getSetting(db, 'branding');
   if (raw) {

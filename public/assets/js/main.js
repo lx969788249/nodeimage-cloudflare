@@ -489,26 +489,29 @@ function renderResults() {
 
 async function convertHeicToJpeg(file) {
   // 浏览器内置 HEIC 解码 → Canvas → JPEG Blob
-  try {
-    const bitmap = await createImageBitmap(file);
-    const canvas = document.createElement('canvas');
-    canvas.width = bitmap.width;
-    canvas.height = bitmap.height;
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(bitmap, 0, 0);
-    bitmap.close();
-    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.85));
-    return new File([blob], file.name.replace(/\.(heic|heif)$/i, '.jpg'), { type: 'image/jpeg' });
-  } catch {
-    return file; // 转换失败，用原文件
-  }
+  // 注意：Firefox 不支持 HEIC，会走 catch 分支
+  const bitmap = await createImageBitmap(file);
+  const canvas = document.createElement('canvas');
+  canvas.width = bitmap.width;
+  canvas.height = bitmap.height;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(bitmap, 0, 0);
+  bitmap.close();
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.85));
+  return new File([blob], file.name.replace(/\.(heic|heif)$/i, '.jpg'), { type: 'image/jpeg' });
 }
 
 async function uploadFile(file) {
   // HEIC → JPEG 浏览器端转换
-  if (file.type === 'image/heic' || file.type === 'image/heif') {
+  if (file.type === 'image/heic' || file.type === 'image/heif' || file.name.match(/\.(heic|heif)$/i)) {
     showProgress('HEIC 转换中...');
-    file = await convertHeicToJpeg(file);
+    try {
+      file = await convertHeicToJpeg(file);
+    } catch {
+      hideProgress();
+      showNotification('HEIC 格式不支持当前浏览器，请使用 Safari/Chrome 或先转换为 JPEG', 'error');
+      return null;
+    }
   }
 
   const formData = new FormData();

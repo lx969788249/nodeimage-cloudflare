@@ -487,16 +487,43 @@ function renderResults() {
   });
 }
 
+let _libheifModule = null;
+async function loadHeifWasm() {
+  if (_libheifModule) return _libheifModule;
+  // 动态加载 libheif-js WASM (仅 HEIC 且浏览器不支持时加载)
+  _libheifModule = await import('https://cdn.jsdelivr.net/npm/libheif-js@1.19.8/libheif-wasm/libheif-bundle.mjs');
+  return _libheifModule;
+}
+
 async function convertHeicToJpeg(file) {
-  // 浏览器内置 HEIC 解码 → Canvas → JPEG Blob
-  // 注意：Firefox 不支持 HEIC，会走 catch 分支
-  const bitmap = await createImageBitmap(file);
+  // 优先用浏览器原生 HEIC 解码 (Safari/Chrome — 快，零额外体积)
+  try {
+    const bitmap = await createImageBitmap(file);
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(bitmap, 0, 0);
+    bitmap.close();
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.85));
+    return new File([blob], file.name.replace(/\.(heic|heif)$/i, '.jpg'), { type: 'image/jpeg' });
+  } catch {
+    // 原生不支持 → libheif-js WASM 兜底 (Firefox 等)
+  }
+
+  const libheif = await loadHeifWasm();
+  const fileBuffer = await file.arrayBuffer();
+  const decoder = new libheif.HeifDecoder();
+  const data = decoder.decode(new Uint8Array(fileBuffer));
+  if (!data || !data.length) throw new Error('HEIC decode failed');
+
+  const image = data[0];
   const canvas = document.createElement('canvas');
-  canvas.width = bitmap.width;
-  canvas.height = bitmap.height;
-  const ctx = canvas.getContext('2d');
-  ctx.drawImage(bitmap, 0, 0);
-  bitmap.close();
+  canvas.width = image.get_width();
+  canvas.height = image.get_height();
+  // display() 绘制到 Canvas Context
+  image.display(canvas.getContext('2d'));
+
   const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.85));
   return new File([blob], file.name.replace(/\.(heic|heif)$/i, '.jpg'), { type: 'image/jpeg' });
 }
@@ -509,7 +536,7 @@ async function uploadFile(file) {
       file = await convertHeicToJpeg(file);
     } catch {
       hideProgress();
-      showNotification('HEIC 格式不支持当前浏览器，请使用 Safari/Chrome 或先转换为 JPEG', 'error');
+      showNotification('HEIC 解码失败，请尝试使用 Safari/Chrome 浏览器，或手动转换为 JPEG/PNG 后上传', 'error');
       return null;
     }
   }

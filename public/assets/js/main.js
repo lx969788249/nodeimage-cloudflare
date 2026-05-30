@@ -35,6 +35,11 @@ const state = {
     subtitle: 'NodeSeek专用图床·克隆版',
     icon: null,
     registrationEnabled: false
+  },
+  watermark: {
+    enabled: false,
+    opacity: 0.5,
+    position: 'br'
   }
 };
 
@@ -119,7 +124,15 @@ const els = {
   modalImage: document.getElementById('modalImage'),
   closeModal: document.getElementById('closeModal'),
   zoomSlider: document.getElementById('zoomSlider'),
-  registerBtn: document.getElementById('registerBtn')
+  registerBtn: document.getElementById('registerBtn'),
+  // 水印设置
+  watermarkEnabled: document.getElementById('watermarkEnabled'),
+  watermarkPosition: document.getElementById('watermarkPosition'),
+  watermarkOpacity: document.getElementById('watermarkOpacity'),
+  watermarkOpacityValue: document.getElementById('watermarkOpacityValue'),
+  watermarkFileInput: document.getElementById('watermarkFileInput'),
+  uploadWatermarkBtn: document.getElementById('uploadWatermarkBtn'),
+  watermarkUploadStatus: document.getElementById('watermarkUploadStatus'),
 };
 
 const allowedTypes = [
@@ -352,9 +365,10 @@ function switchView(view) {
   }
   if (view === 'settings') {
     loadBackupSettings();
+    loadWatermarkSettings();
     // 管理 section 仅管理员可见
     const isAdmin = isAdminUser();
-    ['adminSection', 'registerSection', 'userManagementSection', 'backupSection', 'autoBackupSection'].forEach((id) => {
+    ['adminSection', 'registerSection', 'userManagementSection', 'backupSection', 'autoBackupSection', 'watermarkSection'].forEach((id) => {
       const el = document.getElementById(id);
       if (el) el.style.display = isAdmin ? '' : 'none';
     });
@@ -417,7 +431,7 @@ function renderResults() {
     const thumbWrap = document.createElement('div');
     thumbWrap.className = 'thumb-wrap';
     const imageEl = document.createElement('img');
-    imageEl.src = res.thumbUrl || res.url;
+    imageEl.src = res.thumbUrl || (res.url + '?w=400');
     imageEl.alt = '图片';
     imageEl.loading = 'lazy';
     thumbWrap.appendChild(imageEl);
@@ -554,7 +568,7 @@ function renderHistory() {
     const thumbWrap = document.createElement('div');
     thumbWrap.className = 'thumb-wrap';
     const imageEl = document.createElement('img');
-    imageEl.src = img.thumbUrl || img.url;
+    imageEl.src = img.thumbUrl || (img.url + '?w=400');
     imageEl.alt = '图片';
     imageEl.loading = 'lazy';
     thumbWrap.appendChild(imageEl);
@@ -798,7 +812,7 @@ async function deleteImages(ids) {
 }
 
 function openImageModal(url) {
-  els.modalImage.src = url;
+  els.modalImage.src = url + '?w=1200';
   els.modalImage.style.transform = 'translate(-50%, -50%) scale(1)';
   els.zoomSlider.value = 1;
   els.modal.style.display = 'flex';
@@ -1038,7 +1052,7 @@ function setupEventListeners() {
       if (!dirty.length) { showNotification('没有需要保存的更改', 'info'); return; }
 
       const saved = [];
-      let hasBranding = false, hasBackup = false;
+      let hasBranding = false, hasBackup = false, hasWatermark = false;
 
       for (const section of dirty) {
         const type = section.dataset.save;
@@ -1050,6 +1064,8 @@ function setupEventListeners() {
           hasBranding = true;
         } else if (type === 'backup') {
           hasBackup = true;
+        } else if (type === 'watermark') {
+          hasWatermark = true;
         }
       }
 
@@ -1076,6 +1092,18 @@ function setupEventListeners() {
           secs.forEach((s) => { s.classList.remove('dirty'); saved.push(s.querySelector('h3')?.textContent || ''); });
         } catch (err) {
           showNotification('备份设置保存失败: ' + err.message, 'error');
+          return;
+        }
+      }
+
+      // 水印设置通过 API 保存
+      if (hasWatermark) {
+        try {
+          await saveWatermarkSettings();
+          const secs = document.querySelectorAll('.settings-section.dirty[data-save="watermark"]');
+          secs.forEach((s) => { s.classList.remove('dirty'); saved.push(s.querySelector('h3')?.textContent || ''); });
+        } catch (err) {
+          showNotification('水印设置保存失败: ' + err.message, 'error');
           return;
         }
       }
@@ -1117,6 +1145,59 @@ function setupEventListeners() {
         return;
       }
       applyBrandingFromInputs();
+    });
+  }
+
+  // 水印设置事件监听
+  if (els.watermarkEnabled) {
+    els.watermarkEnabled.addEventListener('change', () => {
+      state.watermark.enabled = els.watermarkEnabled.checked;
+      markSectionDirty(els.watermarkEnabled);
+    });
+  }
+  if (els.watermarkPosition) {
+    els.watermarkPosition.addEventListener('change', () => {
+      state.watermark.position = els.watermarkPosition.value;
+      markSectionDirty(els.watermarkPosition);
+    });
+  }
+  if (els.watermarkOpacity) {
+    els.watermarkOpacity.addEventListener('input', () => {
+      state.watermark.opacity = parseInt(els.watermarkOpacity.value) / 100;
+      if (els.watermarkOpacityValue) {
+        els.watermarkOpacityValue.textContent = els.watermarkOpacity.value + '%';
+      }
+      markSectionDirty(els.watermarkOpacity);
+    });
+  }
+  if (els.uploadWatermarkBtn && els.watermarkFileInput) {
+    els.uploadWatermarkBtn.addEventListener('click', () => els.watermarkFileInput.click());
+    els.watermarkFileInput.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const formData = new FormData();
+      formData.append('watermark', file);
+      try {
+        const res = await fetch('/api/settings/watermark/upload', {
+          method: 'POST',
+          headers: { 'Authorization': 'Bearer ' + getToken() },
+          body: formData,
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data?.message || '上传失败');
+        if (els.watermarkUploadStatus) {
+          els.watermarkUploadStatus.textContent = '✓ 已上传';
+          els.watermarkUploadStatus.style.color = 'var(--success, #4caf50)';
+        }
+        showNotification('水印图片已上传', 'success');
+      } catch (err) {
+        console.error(err);
+        if (els.watermarkUploadStatus) {
+          els.watermarkUploadStatus.textContent = '✗ ' + err.message;
+          els.watermarkUploadStatus.style.color = 'var(--danger, #f44336)';
+        }
+        showNotification(err.message, 'error');
+      }
     });
   }
 
@@ -1641,6 +1722,50 @@ async function saveBrandingToServer() {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data?.message || '保存失败');
+  }
+  return res.json();
+}
+
+async function loadWatermarkSettings() {
+  try {
+    const res = await fetch('/api/settings/watermark', { headers: authHeaders() });
+    if (!res.ok) return;
+    const data = await res.json();
+    state.watermark = {
+      enabled: !!data.enabled,
+      opacity: Number(data.opacity) || 0.5,
+      position: data.position || 'br',
+    };
+    applyWatermarkSettings();
+  } catch {
+    // ignore — watermark disabled by default
+  }
+}
+
+function applyWatermarkSettings() {
+  if (els.watermarkEnabled) els.watermarkEnabled.checked = state.watermark.enabled;
+  if (els.watermarkPosition) els.watermarkPosition.value = state.watermark.position;
+  if (els.watermarkOpacity) {
+    els.watermarkOpacity.value = Math.round(state.watermark.opacity * 100);
+    if (els.watermarkOpacityValue) {
+      els.watermarkOpacityValue.textContent = Math.round(state.watermark.opacity * 100) + '%';
+    }
+  }
+}
+
+async function saveWatermarkSettings() {
+  const res = await fetch('/api/settings/watermark', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + getToken() },
+    body: JSON.stringify({
+      enabled: state.watermark.enabled,
+      opacity: state.watermark.opacity,
+      position: state.watermark.position,
+    }),
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));

@@ -7,6 +7,8 @@ import imageRoutes from './routes/images';
 import adminRoutes from './routes/admin';
 import backupRoutes from './routes/backup';
 import { json, getTodayRange } from './utils';
+import { getWatermarkConfig } from './db';
+import { processImage } from './image-processor';
 import type { Env, AuthUser } from './types';
 
 const app = new Hono<{ Bindings: Env; Variables: { user: AuthUser | null } }>();
@@ -53,17 +55,45 @@ app.route('/api', imageRoutes);
 app.route('/api', adminRoutes);
 app.route('/api', backupRoutes);
 
-// /uploads/* 从 R2 代理
+// /uploads/* 从 R2 代理 + 图片实时处理
 app.get('/uploads/*', async (c) => {
   const bucket = c.env.IMAGES as R2Bucket;
   const key = c.req.path.replace(/^\/uploads\//, '');
-  const object = await bucket.get(key);
-  if (!object) return c.notFound();
+
+  // 拒绝访问系统文件
+  if (key.startsWith('_system/')) return c.notFound();
+
+  const q = c.req.query();
+
+  // 无参数 → 原图直出（快速路径）
+  if (!q.w && !q.h && !q.f && !q.wm) {
+    const object = await bucket.get(key);
+    if (!object) return c.notFound();
+    const headers = new Headers();
+    object.writeHttpMetadata(headers);
+    headers.set('Cache-Control', 'public, max-age=31536000, immutable');
+    headers.set('Access-Control-Allow-Origin', '*');
+    return new Response(object.body, { headers });
+  }
+
+  // 有参数 → Photon 处理
+  const opts = {
+    width: q.w ? Math.min(4000, Math.max(1, parseInt(q.w) || 0)) : undefined,
+    height: q.h ? Math.min(4000, Math.max(1, parseInt(q.h) || 0)) : undefined,
+    format: (['webp', 'jpeg', 'png'].includes(q.f) ? q.f : undefined) as 'webp' | 'jpeg' | 'png' | undefined,
+    quality: q.q ? Math.min(100, Math.max(1, parseInt(q.q) || 85)) : undefined,
+    watermark: q.wm === '1',
+  };
+
+  const wmConfig = await getWatermarkConfig(c.env.DB);
+  const result = await processImage(bucket, key, opts, wmConfig);
+  if (!result) return c.notFound();
+
   const headers = new Headers();
-  object.writeHttpMetadata(headers);
+  headers.set('Content-Type', result.contentType);
   headers.set('Cache-Control', 'public, max-age=31536000, immutable');
   headers.set('Access-Control-Allow-Origin', '*');
-  return new Response(object.body, { headers });
+  return new Response(result.body, { headers });
 });
 
 export default app;

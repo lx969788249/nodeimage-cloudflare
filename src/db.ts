@@ -44,6 +44,12 @@ export interface BackupConfig {
   webhookUrl: string;
 }
 
+export interface WatermarkConfig {
+  enabled: boolean;
+  opacity: number;
+  position: 'tl' | 'tr' | 'bl' | 'br' | 'center';
+}
+
 // --- User operations ---
 
 export async function getUser(db: D1Database, id: string): Promise<User | null> {
@@ -297,6 +303,18 @@ export async function ensureDefaultUser(db: D1Database): Promise<void> {
       createdAt: Date.now(),
     });
   }
+}
+
+export async function getWatermarkConfig(db: D1Database): Promise<WatermarkConfig> {
+  const raw = await getSetting(db, 'watermark');
+  if (raw) {
+    try {
+      return JSON.parse(raw);
+    } catch {
+      // fall through
+    }
+  }
+  return { enabled: false, opacity: 0.5, position: 'br' };
 }
 
 export async function getBranding(db: D1Database): Promise<Branding> {

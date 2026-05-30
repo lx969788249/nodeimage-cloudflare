@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { hashPassword } from '../crypto';
 import type { R2Bucket } from '@cloudflare/workers-types';
 import { authMiddleware, requireAdmin } from '../auth';
-import { listUsers, getUser, getUserByUsername, updateUser, deleteUser, deleteImagesByIds, getBranding, getBackupConfig, setSetting, listImagesByUser, createUser, getStats } from '../db';
+import { listUsers, getUser, getUserByUsername, updateUser, deleteUser, deleteImagesByIds, getBranding, getBackupConfig, getWatermarkConfig, setSetting, listImagesByUser, createUser, getStats } from '../db';
 import { json, errorJson, generateApiKey, nanoid } from '../utils';
 import type { AuthUser, Env } from '../types';
 
@@ -119,6 +119,46 @@ adminRoutes.post('/settings/backup', authMiddleware, requireAdmin, async (c) => 
   await setSetting(c.env.DB, 'backup', JSON.stringify(updated));
   const result = { ...updated, s3AccessKey: updated.s3AccessKey ? '***' + updated.s3AccessKey.slice(-4) : '', s3SecretKey: updated.s3SecretKey ? '***' : '' };
   return json({ message: '备份设置已更新', config: result });
+});
+
+// GET /api/settings/watermark
+adminRoutes.get('/settings/watermark', authMiddleware, requireAdmin, async (c) => {
+  const config = await getWatermarkConfig(c.env.DB);
+  return json({ enabled: config.enabled, opacity: config.opacity, position: config.position });
+});
+
+// POST /api/settings/watermark
+adminRoutes.post('/settings/watermark', authMiddleware, requireAdmin, async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const config = {
+    enabled: body.enabled === true || body.enabled === 'true',
+    opacity: Math.min(1, Math.max(0, Number(body.opacity) || 0.5)),
+    position: ['tl', 'tr', 'bl', 'br', 'center'].includes(body.position) ? body.position : 'br',
+  };
+  await setSetting(c.env.DB, 'watermark', JSON.stringify(config));
+  return json({ message: '水印设置已更新', watermark: config });
+});
+
+// POST /api/settings/watermark/upload — 上传水印图片
+adminRoutes.post('/settings/watermark/upload', authMiddleware, requireAdmin, async (c) => {
+  const formData = await c.req.formData().catch(() => null);
+  if (!formData) return errorJson('无效的请求数据');
+
+  const file = formData.get('watermark');
+  if (!file || typeof file === 'string') return errorJson('缺少水印图片');
+
+  const fileObj = file as unknown as { type: string; size: number; arrayBuffer(): Promise<ArrayBuffer> };
+  if (!fileObj.type.startsWith('image/png') && !fileObj.type.startsWith('image/jpeg')) {
+    return errorJson('水印图片仅支持 PNG/JPEG 格式');
+  }
+  if (fileObj.size > 5 * 1024 * 1024) {
+    return errorJson('水印图片大小不能超过 5MB', 413);
+  }
+
+  const buffer = await fileObj.arrayBuffer();
+  const bucket = c.env.IMAGES as R2Bucket;
+  await bucket.put('_system/watermark.png', buffer, { httpMetadata: { contentType: fileObj.type } });
+  return json({ message: '水印图片已上传' });
 });
 
 // GET /api/stats

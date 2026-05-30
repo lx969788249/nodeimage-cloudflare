@@ -297,6 +297,44 @@
               </div>
             </section>
 
+            <!-- 水印设置 -->
+            <section class="settings-section" id="watermarkSection" data-save="watermark">
+              <span class="dirty-badge">未保存</span>
+              <h3>水印设置</h3>
+              <div class="setting-row">
+                <label class="checkbox-container">
+                  <input type="checkbox" id="watermarkEnabled">
+                  <span class="checkmark"></span>
+                  <div class="setting-label"><span class="setting-title">开启全局水印</span><span class="setting-desc">开启后可通过 ?wm=1 参数为图片叠加水印</span></div>
+                </label>
+              </div>
+              <div class="settings-grid">
+                <div class="setting-row">
+                  <label class="setting-title">水印位置</label>
+                  <select id="watermarkPosition" class="text-input" style="flex:1;">
+                    <option value="br">右下角</option>
+                    <option value="bl">左下角</option>
+                    <option value="tr">右上角</option>
+                    <option value="tl">左上角</option>
+                    <option value="center">居中</option>
+                  </select>
+                </div>
+                <div class="setting-row">
+                  <label class="setting-title">透明度</label>
+                  <input type="range" id="watermarkOpacity" min="0" max="100" value="50" style="flex:1;">
+                  <span id="watermarkOpacityValue" style="min-width:40px;text-align:right;">50%</span>
+                </div>
+              </div>
+              <div class="setting-row" style="margin-top:8px;">
+                <label class="setting-title">水印图片</label>
+                <div style="display:flex;align-items:center;gap:8px;">
+                  <input type="file" id="watermarkFileInput" accept="image/png,image/jpeg" style="display:none;">
+                  <button class="tailwind-btn" id="uploadWatermarkBtn">上传水印图片</button>
+                  <span id="watermarkUploadStatus" style="font-size:12px;"></span>
+                </div>
+              </div>
+            </section>
+
             <!-- 用户管理 -->
             <section class="settings-section" id="userManagementSection">
               <h3>用户管理</h3>

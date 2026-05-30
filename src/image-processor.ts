@@ -1,12 +1,6 @@
 import type { R2Bucket } from '@cloudflare/workers-types';
-import { PhotonImage, draw_text_with_border } from '@cf-wasm/photon/workerd';
-import { ready, decode, resize } from '@standardagents/sip';
+import { PhotonImage, resize, draw_text_with_border, SamplingFilter } from '@cf-wasm/photon/workerd';
 import type { WatermarkConfig } from './db';
-
-// jsquash libwebp — lossy WebP encode (Cloudflare Workers compatible)
-import encodeWebp, { init as initWebpEnc } from '@jsquash/webp/encode';
-// @ts-expect-error WASM binary — Wrangler resolves relative to src/
-import WEBP_ENC_WASM from '../node_modules/@jsquash/webp/codec/enc/webp_enc_simd.wasm';
 
 export interface ProcessOptions {
 	width?: number;
@@ -17,90 +11,112 @@ export interface ProcessOptions {
 
 const DEFAULT_QUALITY = 80;
 const MAX_DIM = 4000;
+// Photon 解码大图可能 OOM，超过此大小的文件跳过转换
+const MAX_CONVERT_SIZE = 2 * 1024 * 1024;
 
-let _ready = false;
-async function ensureReady() {
-	if (_ready) return;
-	await Promise.all([ready(), initWebpEnc(WEBP_ENC_WASM)]);
-	_ready = true;
-}
-
-interface PixelData { data: Uint8ClampedArray; width: number; height: number }
-
-async function collectImageData(
-	stream: AsyncIterable<{ data: Uint8Array; width: number; y: number }>,
-	imgWidth: number, imgHeight: number,
-): Promise<PixelData> {
-	const rgba = new Uint8ClampedArray(imgWidth * imgHeight * 4);
-	for await (const row of stream) {
-		let s = 0, d = row.y * imgWidth * 4;
-		const end = row.width * 3;
-		while (s < end) {
-			rgba[d++] = row.data[s++];
-			rgba[d++] = row.data[s++];
-			rgba[d++] = row.data[s++];
-			rgba[d++] = 255;
-		}
-	}
-	return { data: rgba, width: imgWidth, height: imgHeight };
-}
-
-/** 上传：SIP 流式缩放 + jsquash 有损 WebP 编码 */
+/** 上传：Photon 转 JPEG (有损压缩，质量可控)。超大文件跳过以免 OOM */
 export async function convertToWebp(
-	inputBytes: Uint8Array, quality: number,
+	inputBytes: Uint8Array,
+	quality: number,
 ): Promise<{ data: Uint8Array; width: number; height: number } | null> {
 	try {
-		await ensureReady();
-		let stream = decode(inputBytes);
-		const info = await stream.info;
-		let w = info.width, h = info.height;
+		let image = PhotonImage.new_from_byteslice(inputBytes);
+		try {
+			let w = image.get_width(), h = image.get_height();
 
-		if (w > MAX_DIM || h > MAX_DIM) {
-			const ratio = Math.min(MAX_DIM / w, MAX_DIM / h);
-			w = Math.round(w * ratio); h = Math.round(h * ratio);
-			stream = resize(stream, { width: w, height: h });
+			// 超大图先缩放
+			if (w > MAX_DIM || h > MAX_DIM) {
+				const ratio = Math.min(MAX_DIM / w, MAX_DIM / h);
+				w = Math.round(w * ratio);
+				h = Math.round(h * ratio);
+				const r = resize(image, w, h, SamplingFilter.Lanczos3);
+				image.free();
+				image = r;
+			}
+
+			const jpegBytes = image.get_bytes_jpeg(quality);
+			return { data: jpegBytes, width: w, height: h };
+		} finally {
+			image.free();
 		}
-
-		const imageData = await collectImageData(stream, w, h);
-		const webpBytes = await encodeWebp(imageData, { quality, method: 3 });
-		return { data: new Uint8Array(webpBytes), width: w, height: h };
-	} catch { return null; }
+	} catch {
+		return null;
+	}
 }
 
-/** 服务端缩放 → WebP */
+/** 服务端缩放 → JPEG (Photon，质量可控) */
 export async function resizeImage(
-	bucket: R2Bucket, key: string, opts: ProcessOptions,
+	bucket: R2Bucket,
+	key: string,
+	opts: ProcessOptions,
 ): Promise<{ body: Uint8Array; contentType: string } | null> {
 	const object = await bucket.get(key);
 	if (!object) return null;
+
+	// 快速路径：原图不太大时直接用 Photon
+	const inputBytes = new Uint8Array(await object.arrayBuffer());
+
+	// 如果文件太大，可能 OOM，降级返回原图
+	if (inputBytes.length > MAX_CONVERT_SIZE) {
+		return null;
+	}
+
 	try {
-		await ensureReady();
-		const inputBytes = new Uint8Array(await object.arrayBuffer());
-		let stream = decode(inputBytes);
-		const info = await stream.info;
-		let w = info.width, h = info.height;
+		let image = PhotonImage.new_from_byteslice(inputBytes);
+		try {
+			let w = image.get_width(), h = image.get_height();
 
-		if (opts.width || opts.height) {
-			w = opts.width ?? Math.round(info.width * (opts.height! / info.height));
-			h = opts.height ?? Math.round(info.height * (opts.width! / info.width));
-			stream = resize(stream, { width: w, height: h });
+			if (opts.width || opts.height) {
+				w = opts.width ?? Math.round(image.get_width() * (opts.height! / image.get_height()));
+				h = opts.height ?? Math.round(image.get_height() * (opts.width! / image.get_width()));
+				const r = resize(image, w, h, SamplingFilter.Lanczos3);
+				image.free();
+				image = r;
+			}
+
+			// 缩略图用 lossless WebP（小图上无损也小），原尺寸用 JPEG
+			const q = opts.quality ?? DEFAULT_QUALITY;
+			if (w <= 1200 && h <= 1200) {
+				const webpBytes = image.get_bytes_webp();
+				return { body: webpBytes, contentType: 'image/webp' };
+			}
+			const jpegBytes = image.get_bytes_jpeg(q);
+			return { body: jpegBytes, contentType: 'image/jpeg' };
+		} finally {
+			image.free();
 		}
-
-		const imageData = await collectImageData(stream, w, h);
-		const webpBytes = await encodeWebp(imageData, { quality: opts.quality ?? DEFAULT_QUALITY, method: 2 });
-		return { body: new Uint8Array(webpBytes), contentType: 'image/webp' };
-	} catch { return null; }
+	} catch {
+		return null;
+	}
 }
 
-/** 缩放 + 文字水印 → WebP */
+/** 缩放 + 文字水印 */
 export async function resizeWithWatermark(
-	bucket: R2Bucket, key: string, opts: ProcessOptions, wmConfig: WatermarkConfig,
+	bucket: R2Bucket,
+	key: string,
+	opts: ProcessOptions,
+	wmConfig: WatermarkConfig,
 ): Promise<{ body: Uint8Array; contentType: string } | null> {
-	const resized = await resizeImage(bucket, key, opts);
-	if (!resized) return null;
+	const object = await bucket.get(key);
+	if (!object) return null;
+
+	const inputBytes = new Uint8Array(await object.arrayBuffer());
+	if (inputBytes.length > MAX_CONVERT_SIZE) return null;
+
 	try {
-		const image = PhotonImage.new_from_byteslice(resized.body);
+		let image = PhotonImage.new_from_byteslice(inputBytes);
 		try {
+			let w = image.get_width(), h = image.get_height();
+
+			if (opts.width || opts.height) {
+				w = opts.width ?? Math.round(w * (opts.height! / h));
+				h = opts.height ?? Math.round(h * (opts.width! / w));
+				const r = resize(image, w, h, SamplingFilter.Lanczos3);
+				image.free();
+				image = r;
+			}
+
+			// 文字水印
 			const fs = Math.min(200, Math.max(8, wmConfig.fontSize || 24));
 			const imgW = image.get_width(), imgH = image.get_height();
 			const textW = Math.floor(wmConfig.text.length * fs * 0.6);
@@ -114,8 +130,16 @@ export async function resizeWithWatermark(
 				case 'br': default: x = imgW - textW - padding; y = imgH - padding; break;
 			}
 			draw_text_with_border(image, wmConfig.text, x, y, fs);
-			const out = image.get_bytes_webp();
-			return { body: out, contentType: 'image/webp' };
-		} finally { image.free(); }
-	} catch { return resized; }
+
+			// 缩略图 WebP，大图 JPEG
+			if (w <= 1200) {
+				return { body: image.get_bytes_webp(), contentType: 'image/webp' };
+			}
+			return { body: image.get_bytes_jpeg(opts.quality ?? DEFAULT_QUALITY), contentType: 'image/jpeg' };
+		} finally {
+			image.free();
+		}
+	} catch {
+		return null;
+	}
 }

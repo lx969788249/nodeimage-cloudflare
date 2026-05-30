@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import type { R2Bucket } from '@cloudflare/workers-types';
 import { authMiddleware } from '../auth';
 import { createImage, countTodayUploads, getCompressionConfig } from '../db';
-import { convertToWebp } from '../image-processor';
+import { convertToWebp as compressImage } from '../image-processor';
 import { nanoid, getTodayRange, getYearMonth, getBaseUrl, json, errorJson } from '../utils';
 import type { AuthUser, Env } from '../types';
 import type { ImageRecord } from '../db';
@@ -56,11 +56,11 @@ uploadRoutes.post('/upload', authMiddleware, async (c) => {
 
   if (!SKIP_JPEG_CONVERT.has(fileObj.type)) {
     const compConfig = await getCompressionConfig(db);
-    const result = await convertToWebp(inputBuffer, compConfig.quality);
+    const result = await compressImage(inputBuffer, compConfig.quality);
     if (result) {
       finalBuffer = result.data;
-      finalMime = 'image/webp';
-      finalExt = 'webp';
+      finalMime = 'image/jpeg';
+      finalExt = 'jpg';
       finalSize = result.data.length;
       converted = true;
     } else {

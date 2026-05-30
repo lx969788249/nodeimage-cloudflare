@@ -808,8 +808,10 @@ async function deleteImages(ids) {
     const data = await res.json();
     if (!res.ok) throw new Error(data?.message || '删除失败');
     showNotification('删除完成', 'success');
-    await loadHistory(state.history.currentPage);
+    // 立即更新计数，无需等 API
+    if (state.user) state.user.totalImages = Math.max(0, (state.user.totalImages || 0) - ids.length);
     updateStats();
+    await loadHistory(state.history.currentPage);
   } catch (err) {
     console.error(err);
     showNotification(err.message, 'error');

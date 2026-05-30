@@ -21,7 +21,7 @@ Nodeimage 图床的 Cloudflare 版本，基于 Workers + D1 + R2 构建。
 ### 命令行部署
 
 ```bash
-git clone https://github.com/你的用户名/NodeJoker-cloudflare.git
+git clone https://github.com/lx969788249/NodeJoker-cloudflare.git
 cd NodeJoker-cloudflare
 npm install
 npx wrangler login

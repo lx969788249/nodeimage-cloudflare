@@ -1,6 +1,6 @@
 name = "nodejoker"
 main = "src/index.ts"
-compatibility_date = "2025-01-01"
+compatibility_date = "2025-05-30"
 
 # 前端静态资源（直接由平台托管，不走 Worker 计费）
 [assets]

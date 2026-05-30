@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { hashPassword } from '../crypto';
 import type { R2Bucket } from '@cloudflare/workers-types';
 import { authMiddleware, requireAdmin } from '../auth';
-import { listUsers, getUser, getUserByUsername, updateUser, deleteUser, deleteImagesByIds, getBranding, getBackupConfig, setSetting, listImagesByUser, createUser } from '../db';
+import { listUsers, getUser, getUserByUsername, updateUser, deleteUser, deleteImagesByIds, getBranding, getBackupConfig, setSetting, listImagesByUser, createUser, getStats } from '../db';
 import { json, errorJson, generateApiKey, nanoid } from '../utils';
 import type { AuthUser, Env } from '../types';
 
@@ -41,8 +41,11 @@ adminRoutes.post('/admin/users/:id', authMiddleware, requireAdmin, async (c) => 
   const nextName = (body.username || '').trim();
   if (!nextName) return errorJson('用户名不能为空');
 
-  const allUsers = await listUsers(c.env.DB);
-  if (allUsers.find((u) => u.username === nextName && u.id !== target.id)) return errorJson('用户名已存在');
+  // 用精准查询替代 listUsers 全表扫描
+  if (target.username !== nextName.slice(0, 30)) {
+    const dup = await getUserByUsername(c.env.DB, nextName.slice(0, 30));
+    if (dup && dup.id !== target.id) return errorJson('用户名已存在');
+  }
 
   let bumped = false;
   const updates: Record<string, unknown> = {};
@@ -120,7 +123,6 @@ adminRoutes.post('/settings/backup', authMiddleware, requireAdmin, async (c) => 
 
 // GET /api/stats
 adminRoutes.get('/stats', async (c) => {
-  const { getStats } = await import('../db');
   return json(await getStats(c.env.DB));
 });
 

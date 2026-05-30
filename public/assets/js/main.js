@@ -294,20 +294,14 @@ async function refreshUserStatus() {
 }
 
 async function updateStats() {
-  try {
-    if (!state.user) {
-      els.totalImages.textContent = '';
-      els.totalImages.classList.add('hide-badge');
-      return;
-    }
-    const res = await fetch('/api/images?page=1&limit=1', { headers: authHeaders() });
-    if (!res.ok) return;
-    const data = await res.json();
-    els.totalImages.textContent = data.total ?? 0;
-    els.totalImages.classList.remove('hide-badge');
-  } catch (err) {
-    console.error(err);
+  if (!state.user) {
+    els.totalImages.textContent = '';
+    els.totalImages.classList.add('hide-badge');
+    return;
   }
+  // 使用 refreshUserStatus 中已返回的 totalImages，无需额外请求
+  els.totalImages.textContent = state.user.totalImages ?? 0;
+  els.totalImages.classList.remove('hide-badge');
 }
 
 function syncSettingsUi() {
@@ -1593,7 +1587,6 @@ function applyBrandingFromInputs() {
   (async () => {
     try {
       await saveBrandingToServer();
-      await loadAdminUsers();
       await loadBrandingFromServer();
       applyBranding();
       showNotification('已应用图床个性化设置', 'success');

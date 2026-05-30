@@ -40,7 +40,9 @@ uploadRoutes.post('/upload', authMiddleware, async (c) => {
 
   const { year, month } = getYearMonth();
   const id = nanoid();
-  const ext = fileObj.name.includes('.') ? fileObj.name.split('.').pop()?.toLowerCase() || 'png' : 'png';
+  // 使用 lastIndexOf 替代 split().pop() 避免创建临时数组
+  const dotIdx = fileObj.name.lastIndexOf('.');
+  const ext = dotIdx > 0 ? fileObj.name.slice(dotIdx + 1).toLowerCase() || 'png' : 'png';
   const filename = `${year}/${month}/${id}.${ext}`;
 
   const buffer = await fileObj.arrayBuffer();

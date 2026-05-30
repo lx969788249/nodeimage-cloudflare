@@ -1,4 +1,6 @@
 import type { D1Database } from '@cloudflare/workers-types';
+import { hashPassword } from './crypto';
+import { generateApiKey, getTodayRange } from './utils';
 
 export interface User {
   id: string;
@@ -200,37 +202,29 @@ export async function countTodayUploads(
 }
 
 export async function getStats(db: D1Database): Promise<{ total: number; today: number; totalSize: number }> {
-  const totalResult = await db.prepare('SELECT COUNT(*) as count FROM images').first<{ count: number }>();
-  const sizeResult = await db.prepare('SELECT SUM(size) as total FROM images').first<{ total: number }>();
-  const { start, end } = getTodayRangeWrapper();
+  // 合并 COUNT 和 SUM 为一次查询（3→2 次查询）
+  const overall = await db.prepare('SELECT COUNT(*) as count, COALESCE(SUM(size), 0) as total FROM images').first<{ count: number; total: number }>();
+  const { start, end } = getTodayRange();
   const todayResult = await db
     .prepare('SELECT COUNT(*) as count FROM images WHERE createdAt >= ? AND createdAt <= ?')
     .bind(start, end)
     .first<{ count: number }>();
 
   return {
-    total: totalResult?.count ?? 0,
+    total: overall?.count ?? 0,
     today: todayResult?.count ?? 0,
-    totalSize: sizeResult?.total ?? 0,
+    totalSize: overall?.total ?? 0,
   };
-}
-
-function getTodayRangeWrapper(): { start: number; end: number } {
-  const now = new Date();
-  const start = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0, 0);
-  const end = start + 86400000 - 1;
-  return { start, end };
 }
 
 export async function listExpiredImages(db: D1Database): Promise<ImageRecord[]> {
   const now = Date.now();
+  // 将过期判断下推到 SQL（createdAt + deleteAfterDays * 86400000 <= now）
   const result = await db
-    .prepare('SELECT * FROM images WHERE autoDelete = 1 AND deleteAfterDays IS NOT NULL')
+    .prepare('SELECT * FROM images WHERE autoDelete = 1 AND deleteAfterDays IS NOT NULL AND (createdAt + deleteAfterDays * 86400000) <= ?')
+    .bind(now)
     .all<ImageRecord>();
-  return result.results.filter((img) => {
-    const expiresAt = img.createdAt + (img.deleteAfterDays ?? 0) * 86400000;
-    return now >= expiresAt;
-  });
+  return result.results;
 }
 
 // --- Settings operations ---
@@ -278,14 +272,19 @@ export async function ensureSchema(db: D1Database): Promise<void> {
     key TEXT PRIMARY KEY,
     value TEXT
   )`).run();
+
+  // 关键查询索引（D1 不会自动建索引）
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_users_token ON users(token)').run();
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_users_apiKey ON users(apiKey)').run();
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_images_userId ON images(userId)').run();
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_images_userId_createdAt ON images(userId, createdAt DESC)').run();
+  await db.prepare('CREATE INDEX IF NOT EXISTS idx_images_autoDelete ON images(autoDelete, deleteAfterDays)').run();
 }
 
 export async function ensureDefaultUser(db: D1Database): Promise<void> {
   const admin = await getUser(db, 'admin');
   if (!admin) {
-    const { hashPassword } = await import('./crypto');
     const passwordHash = await hashPassword('admin');
-    const { generateApiKey } = await import('./utils');
     const apiKey = generateApiKey();
     await createUser(db, {
       id: 'admin',

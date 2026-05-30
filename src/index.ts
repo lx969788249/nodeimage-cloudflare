@@ -39,8 +39,11 @@ app.get('/api/user/status', async (c) => {
 
   if (!user) return json({ authenticated: false });
   const { start, end } = getTodayRange();
-  const todayUploads = await countTodayUploads(db, user.id, start, end);
-  return json({ authenticated: true, id: user.id, username: user.username, level: user.level, dailyUploads: todayUploads, dailyUploadLimit: 200, apiKey: user.apiKey });
+  const [todayUploads, totalImages] = await Promise.all([
+    countTodayUploads(db, user.id, start, end),
+    db.prepare('SELECT COUNT(*) as count FROM images WHERE userId = ?').bind(user.id).first<{ count: number }>(),
+  ]);
+  return json({ authenticated: true, id: user.id, username: user.username, level: user.level, dailyUploads: todayUploads, totalImages: totalImages?.count ?? 0, dailyUploadLimit: 200, apiKey: user.apiKey });
 });
 
 // API 路由

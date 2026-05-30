@@ -2,24 +2,22 @@ import { customAlphabet } from 'nanoid';
 
 export const nanoid = customAlphabet('0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz', 12);
 
-export function generateApiKey(): string {
+function generateRandomString(length: number): string {
   const chars = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+  const array = crypto.getRandomValues(new Uint8Array(length));
   let result = '';
-  const array = crypto.getRandomValues(new Uint8Array(48));
-  for (let i = 0; i < 48; i++) {
+  for (let i = 0; i < length; i++) {
     result += chars[array[i] % chars.length];
   }
   return result;
 }
 
+export function generateApiKey(): string {
+  return generateRandomString(48);
+}
+
 export function generateToken(): string {
-  const chars = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
-  let result = '';
-  const array = crypto.getRandomValues(new Uint8Array(48));
-  for (let i = 0; i < 48; i++) {
-    result += chars[array[i] % chars.length];
-  }
-  return result;
+  return generateRandomString(48);
 }
 
 export function getTodayRange(): { start: number; end: number } {

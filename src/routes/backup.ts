@@ -39,12 +39,12 @@ backupRoutes.post('/backup/restore', authMiddleware, requireAdmin, async (c) => 
     const fname = (fileObj.name || '').toLowerCase();
 
     if (fname.endsWith('.tar.gz') || fname.endsWith('.tgz')) {
-      // 旧版 tar.gz 备份 → 提取 db.sqlite + 上传图片到 R2
+      // 旧版 tar.gz 备份 → 单次遍历提取 db.sqlite + 收集 uploads
       const tarGzBuf = new Uint8Array(await fileObj.arrayBuffer());
       const reader = new TarGzReader();
       await reader.load(tarGzBuf);
 
-      const sqliteBuf = reader.getFile('data/db.sqlite');
+      const { sqliteBuf, uploadEntries } = reader.extractAll();
       if (!sqliteBuf) return errorJson('备份中未找到 data/db.sqlite');
 
       const raw = readSqlite(sqliteBuf);
@@ -56,27 +56,22 @@ backupRoutes.post('/backup/restore', authMiddleware, requireAdmin, async (c) => 
 
       // 上传图片到 R2（批量，后台执行）
       const bucket = c.env.IMAGES as R2Bucket;
-      const entries: { key: string; data: Uint8Array }[] = [];
-      reader.forEachFile((name, fileData) => {
-        if (name.startsWith('uploads/') && !name.includes('/thumbs/') && fileData.length > 0) {
-          const key = name.replace(/^uploads\//, '');
-          if (key) entries.push({ key, data: fileData });
-        }
-      });
-
       c.executionCtx.waitUntil((async () => {
         let count = 0;
-        const BATCH = 5;
-        for (let i = 0; i < entries.length; i += BATCH) {
-          const batch = entries.slice(i, i + BATCH);
-          await Promise.all(batch.map(({ key, data }) =>
-            bucket.put(key, data).then(() => { count++; }).catch(() => {})
-          ));
+        const BATCH = 20; // Workers 可承载更高并发
+        for (let i = 0; i < uploadEntries.length; i += BATCH) {
+          const end = Math.min(i + BATCH, uploadEntries.length);
+          const promises: Promise<void>[] = [];
+          for (let j = i; j < end; j++) {
+            const { key, data } = uploadEntries[j];
+            promises.push(bucket.put(key, data).then(() => { count++; }).catch(() => {}));
+          }
+          await Promise.all(promises);
         }
-        console.log(`Migration: uploaded ${count}/${entries.length} files to R2`);
+        console.log(`Migration: uploaded ${count}/${uploadEntries.length} files to R2`);
       })());
 
-      return json({ message: `数据库已恢复，${entries.length} 个图片文件正在上传到 R2` });
+      return json({ message: `数据库已恢复，${uploadEntries.length} 个图片文件正在上传到 R2` });
     } else {
       // JSON 备份
       const text = await fileObj.text();
@@ -85,20 +80,32 @@ backupRoutes.post('/backup/restore', authMiddleware, requireAdmin, async (c) => 
 
     if (!data.users || !data.images || !data.settings) return errorJson('无效的备份文件格式');
 
-    await db.exec('DELETE FROM users');
+    // 使用 D1 batch API 批量写入（性能远优于逐条 INSERT）
+    const statements: { sql: string; params: unknown[] }[] = [];
+
+    statements.push({ sql: 'DELETE FROM users', params: [] });
     for (const u of data.users) {
-      await db.prepare('INSERT INTO users (id, username, passwordHash, apiKey, token, level, sessionVersion, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-        .bind(u.id as string, u.username as string, (u.passwordHash as string) ?? null, (u.apiKey as string) ?? '', (u.token as string) ?? null, (u.level as number) ?? 1, (u.sessionVersion as number) ?? 1, (u.createdAt as number) ?? Date.now()).run();
+      statements.push({
+        sql: 'INSERT INTO users (id, username, passwordHash, apiKey, token, level, sessionVersion, createdAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+        params: [u.id, u.username, (u.passwordHash as string) ?? null, (u.apiKey as string) ?? '', (u.token as string) ?? null, (u.level as number) ?? 1, (u.sessionVersion as number) ?? 1, (u.createdAt as number) ?? Date.now()],
+      });
     }
-    await db.exec('DELETE FROM images');
+    statements.push({ sql: 'DELETE FROM images', params: [] });
     for (const img of data.images) {
-      await db.prepare('INSERT INTO images (id, userId, filename, mime, size, width, height, createdAt, autoDelete, deleteAfterDays) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .bind(img.id as string, img.userId as string, img.filename as string, (img.mime as string) || '', (img.size as number) || 0, (img.width as number) ?? null, (img.height as number) ?? null, (img.createdAt as number) ?? Date.now(), (img.autoDelete as number) ?? 0, (img.deleteAfterDays as number) ?? null).run();
+      statements.push({
+        sql: 'INSERT INTO images (id, userId, filename, mime, size, width, height, createdAt, autoDelete, deleteAfterDays) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+        params: [img.id, img.userId, img.filename, (img.mime as string) || '', (img.size as number) || 0, (img.width as number) ?? null, (img.height as number) ?? null, (img.createdAt as number) ?? Date.now(), (img.autoDelete as number) ?? 0, (img.deleteAfterDays as number) ?? null],
+      });
     }
-    await db.exec('DELETE FROM settings');
+    statements.push({ sql: 'DELETE FROM settings', params: [] });
     for (const s of data.settings) {
-      await db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)').bind(s.key as string, s.value as string).run();
+      statements.push({
+        sql: 'INSERT INTO settings (key, value) VALUES (?, ?)',
+        params: [s.key as string, s.value as string],
+      });
     }
+
+    await db.batch(statements.map(st => db.prepare(st.sql).bind(...st.params)));
     return json({ message: '备份已恢复' });
   } catch (err: unknown) {
     return errorJson('恢复失败: ' + (err instanceof Error ? err.message : '未知错误'), 500);

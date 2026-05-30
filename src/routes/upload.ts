@@ -14,10 +14,11 @@ const MAX_FILE_SIZE = 100 * 1024 * 1024;
 
 const ALLOWED_MIME = new Set([
   'image/png', 'image/jpeg', 'image/jpg', 'image/gif', 'image/webp', 'image/avif',
+  'image/heic', 'image/heif',
 ]);
 
-// 不需要转 JPEG 的格式 (GIF 保留动画, AVIF 本身已现代)
-const SKIP_JPEG_CONVERT = new Set(['image/gif', 'image/avif']);
+// 不需要转 JPEG 的格式 (GIF 保留动画, AVIF 本身已现代, HEIC 服务器无法解码)
+const SKIP_JPEG_CONVERT = new Set(['image/gif', 'image/avif', 'image/heic', 'image/heif']);
 
 uploadRoutes.post('/upload', authMiddleware, async (c) => {
   const user = c.get('user');

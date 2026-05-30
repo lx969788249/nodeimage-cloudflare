@@ -145,7 +145,9 @@ const allowedTypes = [
   'image/jpg',
   'image/gif',
   'image/webp',
-  'image/avif'
+  'image/avif',
+  'image/heic',
+  'image/heif',
 ];
 
 const ICONS = {
@@ -485,7 +487,30 @@ function renderResults() {
   });
 }
 
+async function convertHeicToJpeg(file) {
+  // 浏览器内置 HEIC 解码 → Canvas → JPEG Blob
+  try {
+    const bitmap = await createImageBitmap(file);
+    const canvas = document.createElement('canvas');
+    canvas.width = bitmap.width;
+    canvas.height = bitmap.height;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(bitmap, 0, 0);
+    bitmap.close();
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.85));
+    return new File([blob], file.name.replace(/\.(heic|heif)$/i, '.jpg'), { type: 'image/jpeg' });
+  } catch {
+    return file; // 转换失败，用原文件
+  }
+}
+
 async function uploadFile(file) {
+  // HEIC → JPEG 浏览器端转换
+  if (file.type === 'image/heic' || file.type === 'image/heif') {
+    showProgress('HEIC 转换中...');
+    file = await convertHeicToJpeg(file);
+  }
+
   const formData = new FormData();
   formData.append('image', file);
   formData.append('autoCopyLink', state.settings.autoCopyLink);

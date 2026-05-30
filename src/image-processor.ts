@@ -28,7 +28,7 @@ async function ensureReady() {
 	_ready = true;
 }
 
-/** SIP PixelStream → RGBA ImageData */
+/** SIP PixelStream → RGBA buffer (optimized: single-pass RGB→RGBA) */
 async function collectImageData(
 	stream: AsyncIterable<{ data: Uint8Array; width: number; y: number }>,
 	imgWidth: number,
@@ -36,14 +36,13 @@ async function collectImageData(
 ): Promise<PixelData> {
 	const rgba = new Uint8ClampedArray(imgWidth * imgHeight * 4);
 	for await (const row of stream) {
-		const offset = row.y * imgWidth * 4;
-		for (let x = 0; x < row.width; x++) {
-			const src = x * 3;
-			const dst = offset + x * 4;
-			rgba[dst] = row.data[src];       // R
-			rgba[dst + 1] = row.data[src + 1]; // G
-			rgba[dst + 2] = row.data[src + 2]; // B
-			rgba[dst + 3] = 255;               // A
+		let s = 0, d = row.y * imgWidth * 4;
+		const end = row.width * 3;
+		while (s < end) {
+			rgba[d++] = row.data[s++]; // R
+			rgba[d++] = row.data[s++]; // G
+			rgba[d++] = row.data[s++]; // B
+			rgba[d++] = 255;           // A
 		}
 	}
 	return { data: rgba, width: imgWidth, height: imgHeight };
@@ -69,7 +68,7 @@ export async function convertToWebp(
 		}
 
 		const imageData = await collectImageData(stream, w, h);
-		const webpBytes = await encodeWebp(imageData, { quality });
+		const webpBytes = await encodeWebp(imageData, { quality, method: 3 });
 		return { data: new Uint8Array(webpBytes), width: w, height: h };
 	} catch {
 		return null;
@@ -99,7 +98,8 @@ export async function resizeImage(
 		}
 
 		const imageData = await collectImageData(stream, w, h);
-		const webpBytes = await encodeWebp(imageData, { quality: opts.quality ?? DEFAULT_QUALITY });
+		// 缩略图用 method:2 (更快)，method 越高压缩率越好但越慢
+		const webpBytes = await encodeWebp(imageData, { quality: opts.quality ?? DEFAULT_QUALITY, method: 2 });
 		return { body: new Uint8Array(webpBytes), contentType: 'image/webp' };
 	} catch {
 		return null;

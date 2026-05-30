@@ -10,7 +10,7 @@ async function authenticate(c: any): Promise<AuthUser | null> {
   if (authHeader?.startsWith('Bearer ')) {
     const token = authHeader.slice(7);
     const user = await getUserByToken(db, token);
-    if (user && (user.sessionVersion || 1) === 1) {
+    if (user) {
       return { id: user.id, username: user.username, level: user.level || 1, apiKey: user.apiKey, sessionVersion: user.sessionVersion || 1 };
     }
   }
